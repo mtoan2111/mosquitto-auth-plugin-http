@@ -14,6 +14,8 @@
 static char *http_user_uri = NULL;
 static char *http_acl_uri = NULL;
 
+char *gen_uuid();
+
 int mosquitto_auth_plugin_version(void)
 {
     return MOSQ_AUTH_PLUGIN_VERSION;
@@ -94,9 +96,12 @@ int mosquitto_auth_unpwd_check(void *user_data, struct mosquitto *client, const 
 
     char *escaped_username;
     char *escaped_password;
+    char *request_template = "{\"data\":{\"userName\":\"\",\"token\":\"\"},\"deviceInfo\":{\"osVersion\":\"\",\"os\":\"\",\"deviceName\":\"\",\"deviceId\":\"\"},\"language\":\"vi\",\"ipRequest\":\"\",\"channel\":\"MQTT_NOTIFY\",\"requestId\":\"\"}";
+    char *requestId = gen_uuid();
     escaped_username = curl_easy_escape(ch, username, 0);
     escaped_password = curl_easy_escape(ch, password, 0);
-    size_t data_len = strlen("username=&password=") + strlen(escaped_username) + strlen(escaped_password) + 1;
+
+    size_t data_len = strlen(request_template) + strlen(escaped_username) + strlen(escaped_password) + 1 + 36;
     char *data = NULL;
     if ((data = malloc(data_len)) == NULL)
     {
@@ -109,10 +114,18 @@ int mosquitto_auth_unpwd_check(void *user_data, struct mosquitto *client, const 
     else
     {
         memset(data, 0, data_len);
-        snprintf(data, data_len, "username=%s&password=%s", escaped_username, escaped_password);
+        snprintf(data, data_len, "{\"data\":{\"userName\":\"%s\",\"token\":\"%s\"},\"deviceInfo\":{\"osVersion\":\"\",\"os\":\"\",\"deviceName\":\"\",\"deviceId\":\"\"},\"language\":\"vi\",\"ipRequest\":\"\",\"channel\":\"MQTT_NOTIFY\",\"requestId\":\"%s\"}", escaped_username, escaped_password, requestId);
+        mosquitto_log_printf(MOSQ_LOG_DEBUG, data);
+
+        struct curl_slist *headers = NULL;
+
+        headers = curl_slist_append(headers, "Accept: application/json");
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        headers = curl_slist_append(headers, "charset: utf-8");
 
         curl_easy_setopt(ch, CURLOPT_POST, 1L);
         curl_easy_setopt(ch, CURLOPT_URL, http_user_uri);
+        curl_easy_setopt(ch, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(ch, CURLOPT_POSTFIELDS, data);
         curl_easy_setopt(ch, CURLOPT_POSTFIELDSIZE, strlen(data));
 
@@ -172,9 +185,9 @@ int mosquitto_auth_acl_check(void *user_data, int access, struct mosquitto *clie
     {
         sprintf(access_name, "write");
     }
-    else
+    else if (access == MOSQ_ACL_SUBSCRIBE)
     {
-        sprintf(access_name, "none");
+        sprintf(access_name, "sub");
     }
 
 #ifdef MQAP_DEBUG
@@ -200,10 +213,12 @@ int mosquitto_auth_acl_check(void *user_data, int access, struct mosquitto *clie
     char *escaped_clientid;
     char *escaped_username;
     char *escaped_topic;
+    char *request_template = "{\"data\":{\"clientId\":\"\",\"userName\":\"\",\"topic\":\"\",\"access\":\"\"},\"deviceInfo\":{\"osVersion\":\"\",\"os\":\"\",\"deviceName\":\"\",\"deviceId\":\"\"},\"language\":\"vi\",\"ipRequest\":\"\",\"channel\":\"MQTT_NOTIFY\",\"requestId\":\"\"}";
+    char *requestId = gen_uuid();
     escaped_clientid = curl_easy_escape(ch, clientid, 0);
     escaped_username = curl_easy_escape(ch, username, 0);
     escaped_topic = curl_easy_escape(ch, topic, 0);
-    size_t data_len = strlen("clientid=&username=&topic=&access=") + strlen(escaped_clientid) + strlen(escaped_username) + strlen(escaped_topic) + strlen(access_name) + 1;
+    size_t data_len = strlen(request_template) + strlen(escaped_clientid) + strlen(escaped_username) + strlen(escaped_topic) + strlen(access_name) + 1 + 36;
     char *data = NULL;
     if ((data = malloc(data_len)) == NULL)
     {
@@ -216,10 +231,20 @@ int mosquitto_auth_acl_check(void *user_data, int access, struct mosquitto *clie
     else
     {
         memset(data, 0, data_len);
-        snprintf(data, data_len, "clientid=%s&username=%s&topic=%s&access=%s",
-                         escaped_clientid, escaped_username, escaped_topic, access_name);
+        snprintf(data, data_len, "{\"data\":{\"clientId\":\"%s\",\"userName\":\"%s\",\"topic\":\"%s\",\"access\":\"%s\"},\"deviceInfo\":{\"osVersion\":\"\",\"os\":\"\",\"deviceName\":\"\",\"deviceId\":\"\"},\"language\":\"vi\",\"ipRequest\":\"\",\"channel\":\"MQTT_NOTIFY\",\"requestId\":\"%s\"}",
+                         escaped_clientid, escaped_username, escaped_topic, access_name, requestId);
+
+        mosquitto_log_printf(MOSQ_LOG_DEBUG, data);
+
+        struct curl_slist *headers = NULL;
+
+        headers = curl_slist_append(headers, "Accept: application/json");
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        headers = curl_slist_append(headers, "charset: utf-8");
+
         curl_easy_setopt(ch, CURLOPT_POST, 1L);
         curl_easy_setopt(ch, CURLOPT_URL, http_acl_uri);
+        curl_easy_setopt(ch, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(ch, CURLOPT_POSTFIELDS, data);
         curl_easy_setopt(ch, CURLOPT_POSTFIELDSIZE, strlen(data));
 
@@ -260,4 +285,27 @@ int mosquitto_auth_acl_check(void *user_data, int access, struct mosquitto *clie
 int mosquitto_auth_psk_key_get(void *user_data, struct mosquitto *client, const char *hint, const char *identity, char *key, int max_key_len)
 {
     return MOSQ_ERR_AUTH;
+}
+
+char* gen_uuid() {
+    char v[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+    //3fb17ebc-bc38-4939-bc8b-74f2443281d4
+    //8 dash 4 dash 4 dash 4 dash 12
+    static char buf[37] = {0};
+
+    //gen random for all spaces because lazy
+    for(int i = 0; i < 36; ++i) {
+        buf[i] = v[rand()%16];
+    }
+
+    //put dashes in place
+    buf[8] = '-';
+    buf[13] = '-';
+    buf[18] = '-';
+    buf[23] = '-';
+
+    //needs end byte
+    buf[36] = '\0';
+
+    return buf;
 }
